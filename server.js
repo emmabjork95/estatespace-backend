@@ -1,5 +1,3 @@
-console.log("🔥 server.js is running at all");
-
 import express from "express";
 import cors from "cors";
 
