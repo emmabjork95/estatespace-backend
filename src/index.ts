@@ -2,6 +2,16 @@ import "dotenv/config";
 import express from "express";
 import { supabase } from "./supabase";
 
+console.log("Booting API...");
+
+process.on("uncaughtException", (err) => {
+  console.error("UNCAUGHT EXCEPTION:", err);
+});
+
+process.on("unhandledRejection", (err) => {
+  console.error("UNHANDLED REJECTION:", err);
+});
+
 const app = express();
 app.use(express.json());
 
