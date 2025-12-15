@@ -1,18 +1,18 @@
 import "dotenv/config";
 import express from "express";
 import { supabase } from "./supabase";
-
-console.log("Booting API...");
-
-process.on("uncaughtException", (err) => {
-  console.error("UNCAUGHT EXCEPTION:", err);
-});
-
-process.on("unhandledRejection", (err) => {
-  console.error("UNHANDLED REJECTION:", err);
-});
+import cors from "cors";
 
 const app = express();
+
+app.use(
+  cors({
+    origin: "https://estatespace.vercel.app",
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+  })
+);
+
 app.use(express.json());
 
 app.get("/", (req, res) => {
