@@ -4,14 +4,28 @@ import { supabase } from "./supabase";
 import cors from "cors";
 
 const app = express();
+const allowedOrigins = [
+  "http://localhost:5173",
+  "https://estatespace.vercel.app",
+];
 
 app.use(
   cors({
-    origin: "https://estatespace.vercel.app",
+    origin: (origin, callback) => {
+      // Tillåt requests utan origin (t.ex. Postman)
+      if (!origin) return callback(null, true);
+
+      if (allowedOrigins.includes(origin)) {
+        return callback(null, true);
+      }
+
+      return callback(new Error("Not allowed by CORS"));
+    },
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization"],
   })
 );
+
 
 app.use(express.json());
 
