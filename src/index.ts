@@ -2,6 +2,9 @@ import "dotenv/config";
 import express from "express";
 import { supabase } from "./supabase";
 import cors from "cors";
+import { mg, mgDomain } from "./mailgun";
+
+
 
 const app = express();
 const allowedOrigins = [
@@ -55,6 +58,32 @@ app.get("/supabase-test", async (req, res) => {
 app.get("/health", (_req, res) => res.status(200).json({ ok: true }));
 
 const PORT = Number(process.env.PORT) || 3000;
+
+app.post("/mail/test", async (req, res) => {
+  try {
+    const { to } = req.body as { to?: string };
+
+    if (!to) {
+      return res.status(400).json({
+        ok: false,
+        error: "Du måste skicka med 'to' i body",
+      });
+    }
+
+    const result = await mg.messages.create(mgDomain, {
+      from: `EstateSpace <mailgun@${mgDomain}>`,
+      to: [to],
+      subject: "Mailgun test från EstateSpace ✅",
+      text: "Om du får detta mail fungerar Mailgun via din backend.",
+    });
+
+    res.json({ ok: true, result });
+  } catch (err: any) {
+    console.error("Mailgun error:", err);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
 
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`Server running on port ${PORT}`);
