@@ -3,6 +3,8 @@ import express from "express";
 import { supabase } from "./supabase";
 import cors from "cors";
 import { mg, mgDomain } from "./mailgun";
+import crypto from "crypto";
+import { getUserFromAuthHeader } from "./auth";
 
 
 
@@ -15,7 +17,6 @@ const allowedOrigins = [
 app.use(
   cors({
     origin: (origin, callback) => {
-      // Tillåt requests utan origin (t.ex. Postman)
       if (!origin) return callback(null, true);
 
       if (allowedOrigins.includes(origin)) {
@@ -52,6 +53,58 @@ app.get("/supabase-test", async (req, res) => {
   } catch (err: any) {
     console.error("Unexpected error:", err);
     res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// POST /spaces/:spacesId/invite-email
+app.post("/spaces/:spacesId/invite-email", async (req, res) => {
+  try {
+    const { spacesId } = req.params;
+    const { email } = req.body as { email?: string };
+
+    if (!email) {
+      return res.status(400).json({ ok: false, error: "Missing email" });
+    }
+
+  
+    const { user, error } = await getUserFromAuthHeader(req.headers.authorization);
+    if (!user) {
+      return res.status(401).json({ ok: false, error });
+    }
+
+    const cleanEmail = email.trim().toLowerCase();
+    const token = crypto.randomUUID();
+
+    const { error: insertError } = await supabase.from("invitations").insert({
+      spaces_id: spacesId,
+      profiles_id: user.id, 
+      invited_email: cleanEmail,
+      token,
+      status: "pending",
+      used: false,
+    });
+
+    if (insertError) {
+      return res.status(500).json({ ok: false, error: insertError.message });
+    }
+
+    const frontendUrl = process.env.FRONTEND_URL || "http://localhost:5173";
+    const link = `${frontendUrl}/auth/invite/${token}`;
+
+    await mg.messages.create(mgDomain, {
+      from: `EstateSpace <postmaster@${mgDomain}>`,
+      to: [cleanEmail],
+      subject: "Du är inbjuden till ett Space i EstateSpace",
+      text:
+        `Du har blivit inbjuden till ett Space.\n\n` +
+        `Viktigt: logga in med ${cleanEmail} och klicka på länken:\n` +
+        `${link}\n`,
+    });
+
+    return res.json({ ok: true });
+  } catch (err: any) {
+    console.error("invite-email error:", err);
+    return res.status(500).json({ ok: false, error: err.message });
   }
 });
 
