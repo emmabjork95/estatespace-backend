@@ -60,6 +60,20 @@ app.get("/supabase-test", async (_req, res) => {
   }
 });
 
+app.get("/debug/routes", (_req, res) => {
+  res.json({
+    ok: true,
+    routes: [
+      "GET /",
+      "GET /health",
+      "GET /supabase-test",
+      "POST /spaces/:spacesId/invite-email",
+      "POST /mail/test",
+      "GET /debug/routes",
+    ],
+  });
+});
+
 // ✅ Invite via mail
 app.post("/spaces/:spacesId/invite-email", async (req, res) => {
   try {
