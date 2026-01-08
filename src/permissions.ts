@@ -9,7 +9,7 @@ export async function requireUser(authHeader?: string) {
     return {
       ok: false as const,
       status: 401,
-      error: "Missing Bearer token",
+      error: "Missing Bearer Token",
       user: null,
     };
   }
