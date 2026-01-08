@@ -1,14 +1,18 @@
 import "dotenv/config";
+import crypto from "crypto";
+import cors from "cors";
 import express from "express";
 import { supabase } from "./supabase";
-import cors from "cors";
 import { mg, mgDomain } from "./mailgun";
-import crypto from "crypto";
-import { getUserFromAuthHeader } from "./auth";
+import { requireUser, requireSpaceOwner } from "./permissions";
 
 const app = express();
 
-// ✅ explicita origins + tillåt alla preview-domäner på Vercel
+/*CONFIG*/
+
+const PORT = Number(process.env.PORT) || 3000;
+const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:5173";
+
 const allowedOrigins = [
   "http://localhost:5173",
   "https://estatespace.vercel.app",
@@ -16,22 +20,20 @@ const allowedOrigins = [
 
 function isAllowedOrigin(origin: string) {
   if (allowedOrigins.includes(origin)) return true;
-
-  // ✅ Vercel preview: https://<whatever>.vercel.app
   if (origin.endsWith(".vercel.app")) return true;
-
   return false;
 }
+
+/*MIDDLEWARE*/
 
 app.use(
   cors({
     origin: (origin, callback) => {
-      // Tillåt requests utan origin (t.ex. Postman)
       if (!origin) return callback(null, true);
 
       if (isAllowedOrigin(origin)) return callback(null, true);
 
-      return callback(new Error(`Not allowed by CORS: ${origin}`));
+      return callback(new Error("Not allowed by CORS"));
     },
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization"],
@@ -40,62 +42,42 @@ app.use(
 
 app.use(express.json());
 
+/*ROUTES*/
+
 app.get("/", (_req, res) => {
-  res.send("API is running");
+  return res.send("API is running");
 });
 
-app.get("/supabase-test", async (_req, res) => {
-  try {
-    const { data, error } = await supabase.from("estates").select("*").limit(5);
-
-    if (error) {
-      console.error("Supabase error:", error);
-      return res.status(500).json({ ok: false, error: error.message });
-    }
-
-    res.json({ ok: true, data });
-  } catch (err: any) {
-    console.error("Unexpected error:", err);
-    res.status(500).json({ ok: false, error: err.message });
-  }
+app.get("/health", (_req, res) => {
+  return res.status(200).json({ ok: true });
 });
 
-app.get("/debug/routes", (_req, res) => {
-  res.json({
-    ok: true,
-    routes: [
-      "GET /",
-      "GET /health",
-      "GET /supabase-test",
-      "POST /spaces/:spacesId/invite-email",
-      "POST /mail/test",
-      "GET /debug/routes",
-    ],
-  });
-});
-
-// ✅ Invite via mail
 app.post("/spaces/:spacesId/invite-email", async (req, res) => {
   try {
     const { spacesId } = req.params;
     const { email } = req.body as { email?: string };
 
-    if (!email) {
+    if (!email?.trim()) {
       return res.status(400).json({ ok: false, error: "Missing email" });
     }
 
-    const { user, error } = await getUserFromAuthHeader(req.headers.authorization);
-    if (!user) {
-      return res.status(401).json({ ok: false, error });
+    const auth = await requireUser(req.headers.authorization);
+    if (!auth.ok || !auth.user) {
+      return res.status(auth.status).json({ ok: false, error: auth.error });
     }
 
-    const cleanEmail = email.trim().toLowerCase();
+    const access = await requireSpaceOwner(spacesId, auth.user.id);
+    if (!access.ok) {
+      return res.status(access.status).json({ ok: false, error: access.error });
+    }
+
+    const invitedEmail = email.trim().toLowerCase();
     const token = crypto.randomUUID();
 
     const { error: insertError } = await supabase.from("invitations").insert({
       spaces_id: spacesId,
-      profiles_id: user.id,
-      invited_email: cleanEmail,
+      profiles_id: auth.user.id,
+      invited_email: invitedEmail,
       token,
       status: "pending",
       used: false,
@@ -105,54 +87,70 @@ app.post("/spaces/:spacesId/invite-email", async (req, res) => {
       return res.status(500).json({ ok: false, error: insertError.message });
     }
 
-    const frontendUrl = process.env.FRONTEND_URL || "http://localhost:5173";
-    const link = `${frontendUrl}/auth/invite/${token}`;
+    const link = `${FRONTEND_URL}/auth/invite/${token}`;
 
-    await mg.messages.create(mgDomain, {
-      from: `EstateSpace <postmaster@${mgDomain}>`,
-      to: [cleanEmail],
-      subject: "Du är inbjuden till ett Space i EstateSpace",
-      text:
-        `Du har blivit inbjuden till ett Space.\n\n` +
-        `Viktigt: logga in med ${cleanEmail} och klicka på länken:\n` +
-        `${link}\n`,
+    let mailOk = true;
+
+    try {
+      await mg.messages.create(mgDomain, {
+        from: `EstateSpace <postmaster@${mgDomain}>`,
+        to: [invitedEmail],
+        subject: "Du är inbjuden till ett Space i EstateSpace",
+        text:
+          `Du har blivit inbjuden till ett Space.\n\n` +
+          `Logga in med ${invitedEmail} och klicka på länken:\n` +
+          `${link}\n`,
+      });
+    } catch (err) {
+      mailOk = false;
+      console.error("Mailgun blocked/failed (invite still created):", err);
+    }
+
+    return res.json({
+      ok: true,
+      mailOk,
+      message: mailOk
+        ? "Invite created and email sent"
+        : "Invite created, but email could not be sent in test environment",
     });
-
-    return res.json({ ok: true });
   } catch (err: any) {
     console.error("invite-email error:", err);
-    return res.status(500).json({ ok: false, error: err.message });
+    return res.status(500).json({
+      ok: false,
+      error: err?.message || "Server error",
+    });
   }
 });
-
-app.get("/health", (_req, res) => res.status(200).json({ ok: true }));
 
 app.post("/mail/test", async (req, res) => {
   try {
     const { to } = req.body as { to?: string };
 
-    if (!to) {
+    if (!to?.trim()) {
       return res.status(400).json({
         ok: false,
-        error: "Du måste skicka med 'to' i body",
+        error: "Du måste skicka med 'to'",
       });
     }
 
     const result = await mg.messages.create(mgDomain, {
       from: `EstateSpace <mailgun@${mgDomain}>`,
-      to: [to],
-      subject: "Mailgun test från EstateSpace ✅",
+      to: [to.trim()],
+      subject: "Mailgun test från EstateSpace",
       text: "Om du får detta mail fungerar Mailgun via din backend.",
     });
 
-    res.json({ ok: true, result });
+    return res.json({ ok: true, result });
   } catch (err: any) {
     console.error("Mailgun error:", err);
-    res.status(500).json({ ok: false, error: err.message });
+    return res.status(500).json({
+      ok: false,
+      error: err?.message || "Mail error",
+    });
   }
 });
 
-const PORT = Number(process.env.PORT) || 3000;
+/*START SERVER*/
 
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`Server running on port ${PORT}`);
